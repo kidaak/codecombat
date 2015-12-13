@@ -17,7 +17,7 @@ try {
   var scriptStartTime = new Date();
   var analyticsStringCache = {};
 
-  var numDays = 32;
+  var numDays = 40;
   var daysInMonth = 30;
 
   var startDay = new Date();
@@ -87,6 +87,28 @@ try {
     if (today === day) continue; // Never save data for today because it's incomplete
     for (event in activeUserCounts[day]) {
       insertEventCount(event, day, activeUserCounts[day][event]);
+    }
+  }
+
+  log("Getting active class counts...");
+  var activeClassCounts = getActiveClassCounts(startDay);
+  // printjson(activeClassCounts);
+  log("Inserting active class counts...");
+  for (var event in activeClassCounts) {
+    for (var day in activeClassCounts[event]) {
+      if (today === day) continue; // Never save data for today because it's incomplete
+      insertEventCount(event, day, activeClassCounts[event][day]);
+    }
+  }
+
+  log("Getting recurring revenue counts...");
+  var recurringRevenueCounts = getRecurringRevenueCounts(startDay);
+  // printjson(recurringRevenueCounts);
+  log("Inserting recurring revenue counts...");
+  for (var event in recurringRevenueCounts) {
+    for (var day in recurringRevenueCounts[event]) {
+      if (today === day) continue; // Never save data for today because it's incomplete
+      insertEventCount(event, day, recurringRevenueCounts[event][day]);
     }
   }
 
@@ -438,6 +460,231 @@ function getActiveUserCounts(startDay, activeUserEvents) {
     activeUsersCounts[monthlyActives[i].day]['Monthly Active Users'] = Object.keys(monthUserMap).length;
   }
   return activeUsersCounts;
+}
+
+function getActiveClassCounts(startDay) {
+  // Tally active classes per day
+  // TODO: does not handle class membership changes
+
+  if (!startDay) return {};
+
+  var minGroupSize = 12;
+  var classes = {
+    'Active classes private clan': [],
+    'Active classes managed subscription': [],
+    'Active classes bulk subscription': [],
+    'Active classes prepaid': [],
+    'Active classes course': [],
+  };
+  var userPlayedMap = {};
+
+  // Private clans
+  // TODO: does not handle clan membership changes over time
+  var cursor = db.clans.find({$and: [{type: 'private'}, {$where: 'this.members.length >= ' + minGroupSize}]});
+  while (cursor.hasNext()) {
+    var doc = cursor.next();
+    var members = doc.members.map(function(a) {
+      userPlayedMap[a.valueOf()] = [];
+      return a.valueOf();
+    });
+    classes['Active classes private clan'].push({
+      owner: doc.ownerID.valueOf(),
+      members: members,
+      activeDayMap: {}
+    });
+  }
+
+  // Managed subscriptions
+  // TODO: does not handle former recipients playing after sponsorship ends
+  var bulkSubGroups = {};
+  cursor = db.payments.find({$and: [{service: 'stripe'}, {$where: '!this.purchaser.equals(this.recipient)'}]});
+  while (cursor.hasNext()) {
+    var doc = cursor.next();
+    var purchaser = doc.purchaser.valueOf();
+    if (!bulkSubGroups[purchaser]) bulkSubGroups[purchaser] = {};
+    bulkSubGroups[purchaser][doc.recipient.valueOf()] = true;
+  }
+  for (var purchaser in bulkSubGroups) {
+    if (Object.keys(bulkSubGroups[purchaser]).length >= minGroupSize) {
+      for (var member in bulkSubGroups[purchaser]) {
+        userPlayedMap[member] = [];
+      }
+      classes['Active classes managed subscription'].push({
+        owner: purchaser,
+        members: Object.keys(bulkSubGroups[purchaser]),
+        activeDayMap: {}
+      });
+    }
+  }
+
+  // Bulk subscriptions
+  bulkSubGroups = {};
+  cursor = db.payments.find({$and: [{service: 'external'}, {$where: '!this.purchaser.equals(this.recipient)'}]});
+  while (cursor.hasNext()) {
+    var doc = cursor.next();
+    var purchaser = doc.purchaser.valueOf();
+    if (!bulkSubGroups[purchaser]) bulkSubGroups[purchaser] = {};
+    bulkSubGroups[purchaser][doc.recipient.valueOf()] = true;
+  }
+  for (var purchaser in bulkSubGroups) {
+    if (Object.keys(bulkSubGroups[purchaser]).length >= minGroupSize) {
+      for (var member in bulkSubGroups[purchaser]) {
+        userPlayedMap[member] = [];
+      }
+      classes['Active classes bulk subscription'].push({
+        owner: purchaser,
+        members: Object.keys(bulkSubGroups[purchaser]),
+        activeDayMap: {}
+      });
+    }
+  }
+
+  // Prepaids terminal_subscription & course
+  bulkSubGroups = {};
+  cursor = db.prepaids.find(
+    {$and: [{type: {$in: ['terminal_subscription', 'course']}}, {$where: 'this.redeemers && this.redeemers.length >= ' + minGroupSize}]},
+    {creator: 1, type: 1, redeemers: 1}
+  );
+  while (cursor.hasNext()) {
+    var doc = cursor.next();
+    var owner = doc.creator.valueOf();
+    var members = [];
+    for (var i = 0 ; i < doc.redeemers.length; i++) {
+      userPlayedMap[doc.redeemers[i].userID.valueOf()] = [];
+      members.push(doc.redeemers[i].userID.valueOf());
+    }
+    var event = doc.type == 'terminal_subscription' ? 'Active classes prepaid' : 'Active classes course';
+    classes[event].push({
+      owner: owner,
+      members: members,
+      activeDayMap: {}
+    });
+  }
+
+  // printjson(classes);
+
+  // TODO: classrooms
+
+  // Find all the started level events for our class members, for startDay - daysInMonth
+  var startDate = ISODate(startDay + "T00:00:00.000Z");
+  startDate.setUTCDate(startDate.getUTCDate() - daysInMonth);
+  var endDate = ISODate(startDay + "T00:00:00.000Z");
+  var todayDate = new Date(new Date().toISOString().substring(0, 10));
+  var startObj = objectIdWithTimestamp(startDate);
+  var queryParams = {$and: [
+    {_id: {$gte: startObj}},
+    {event: 'Started Level'},
+    {user: {$in: Object.keys(userPlayedMap)}}
+  ]};
+  cursor = logDB['log'].find(queryParams, {user: 1});
+  // cursor = db['level.sessions'].find({$and: [{creator: {$in: Object.keys(userPlayedMap)}}, {changed: {$gte: startDate}}]}, {creator: 1, changed: 1});
+  while (cursor.hasNext()) {
+    var doc = cursor.next();
+    userPlayedMap[doc.user].push(doc._id.getTimestamp());
+  }
+
+  // printjson(userPlayedMap);
+  // print(startDate, endDate, todayDate);
+
+  // Now we have a set of classes, and when users played
+  // For a given day, walk classes and find out how many members were active during the previous daysInMonth
+  while (endDate < todayDate) {
+    var endDay = endDate.toISOString().substring(0, 10);
+
+    // For each class
+    for (var event in classes) {
+      for (var i = 0; i < classes[event].length; i++) {
+
+        // For each member of current class
+        var activeMemberCount = 0;
+        for (var j = 0; j < classes[event][i].members.length; j++) {
+          var member = classes[event][i].members[j];
+
+          // Was member active during current timeframe?
+          if (userPlayedMap[member]) {
+            for (var k = 0; k < userPlayedMap[member].length; k++) {
+              if (userPlayedMap[member][k] > startDate && userPlayedMap[member][k] <= endDate) {
+                activeMemberCount++;
+                break;
+              }
+            }
+          }
+        }
+
+        // Classes active for a given day if has minGroupSize members, and at least 1/2 played in last daysInMonth days
+        if (activeMemberCount >= Math.round(classes[event][i].members.length / 2)) {
+          classes[event][i].activeDayMap[endDay] = true;
+        }
+      }
+    }
+    startDate.setUTCDate(startDate.getUTCDate() + 1);
+    endDate.setUTCDate(endDate.getUTCDate() + 1);
+  }
+
+  var activeClassCounts = {};
+  for (var event in classes) {
+    if (!activeClassCounts[event]) activeClassCounts[event] = {};
+    for (var i = 0; i < classes[event].length; i++) {
+      for (var endDay in classes[event][i].activeDayMap) {
+        if (!activeClassCounts[event][endDay]) activeClassCounts[event][endDay] = 0;
+        activeClassCounts[event][endDay]++;
+      }
+    }
+  }
+  return activeClassCounts;
+}
+
+function getRecurringRevenueCounts(startDay) {
+  if (!startDay) return {};
+
+  var dailyRevenueCounts = {};
+  var startObj = objectIdWithTimestamp(ISODate(startDay + "T00:00:00.000Z"));
+  var cursor = db.payments.find({_id: {$gte: startObj}});
+  while (cursor.hasNext()) {
+    var doc = cursor.next();
+    var day;
+    if (doc.created) {
+      day = doc.created.substring(0, 10);
+    }
+    else {
+      day = doc._id.getTimestamp().toISOString().substring(0, 10);
+    }
+
+    if (doc.service === 'ios' || doc.service === 'bitcoin') continue;
+
+    if (doc.productID && doc.productID.indexOf('gems_') === 0) {
+      if (!dailyRevenueCounts['DRR gems']) dailyRevenueCounts['DRR gems'] = {};
+      if (!dailyRevenueCounts['DRR gems'][day]) dailyRevenueCounts['DRR gems'][day] = 0;
+      dailyRevenueCounts['DRR gems'][day] += doc.amount
+    }
+    else if (doc.productID === 'custom' || doc.service === 'external' || doc.service === 'invoice') {
+      if (!dailyRevenueCounts['DRR school sales']) dailyRevenueCounts['DRR school sales'] = {};
+      if (!dailyRevenueCounts['DRR school sales'][day]) dailyRevenueCounts['DRR school sales'][day] = 0;
+      dailyRevenueCounts['DRR school sales'][day] += doc.amount
+    }
+    else if (doc.service === 'stripe' && doc.gems === 42000) {
+      if (!dailyRevenueCounts['DRR yearly subs']) dailyRevenueCounts['DRR yearly subs'] = {};
+      if (!dailyRevenueCounts['DRR yearly subs'][day]) dailyRevenueCounts['DRR yearly subs'][day] = 0;
+      dailyRevenueCounts['DRR yearly subs'][day] += doc.amount
+    }
+    else if (doc.service === 'stripe') {
+      // Catches prepaids, and assumes all are type terminal_subscription
+      if (!dailyRevenueCounts['DRR monthly subs']) dailyRevenueCounts['DRR monthly subs'] = {};
+      if (!dailyRevenueCounts['DRR monthly subs'][day]) dailyRevenueCounts['DRR monthly subs'][day] = 0;
+      dailyRevenueCounts['DRR monthly subs'][day] += doc.amount
+    }
+    else if (doc.service === 'paypal') {
+      if (!dailyRevenueCounts['DRR monthly subs']) dailyRevenueCounts['DRR monthly subs'] = {};
+      if (!dailyRevenueCounts['DRR monthly subs'][day]) dailyRevenueCounts['DRR monthly subs'][day] = 0;
+      dailyRevenueCounts['DRR monthly subs'][day] += doc.amount
+    }
+    // else {
+    //   // printjson(doc);
+    //   // print(doc.service, doc.amount, doc.description, JSON.stringify(doc.stripe));
+    // }
+  }
+
+  return dailyRevenueCounts;
 }
 
 function insertEventCount(event, day, count) {
