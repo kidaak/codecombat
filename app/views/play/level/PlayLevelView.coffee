@@ -410,7 +410,9 @@ module.exports = class PlayLevelView extends RootView
 
   simulateNextGame: ->
     return @simulator.fetchAndSimulateOneGame() if @simulator
-    @simulator = new Simulator background: true
+    simulatorOptions = background: true, leagueID: @courseInstanceID
+    simulatorOptions.levelID = @level.get('slug') if @level.get('type', true) in ['course-ladder', 'hero-ladder']
+    @simulator = new Simulator simulatorOptions
     # Crude method of mitigating Simulator memory leak issues
     fetchAndSimulateOneGameOriginal = @simulator.fetchAndSimulateOneGame
     @simulator.fetchAndSimulateOneGame = =>
@@ -424,7 +426,9 @@ module.exports = class PlayLevelView extends RootView
     @simulator.fetchAndSimulateOneGame()
 
   shouldSimulate: ->
-    # Crude heuristics are crude.
+    return true if @getQueryVariable('simulate') is true
+    return false if @getQueryVariable('simulate') is false
+    stillBuggy = true  # Keep this true while we still haven't fixed the zombie worker problem when simulating the more difficult levels on Chrome
     defaultCores = 2
     cores = window.navigator.hardwareConcurrency or defaultCores  # Available on Chrome/Opera, soon Safari
     defaultHeapLimit = 793000000
@@ -439,14 +443,17 @@ module.exports = class PlayLevelView extends RootView
     if levelType is 'course'
       return false
     else if levelType is 'hero' and gamesSimulated
+      return false if stillBuggy
       return false if cores < 8
       return false if heapLimit < defaultHeapLimit
       return false if @loadDuration > 10000
     else if levelType is 'hero-ladder' and gamesSimulated
+      return false if stillBuggy
       return false if cores < 4
       return false if heapLimit < defaultHeapLimit
       return false if @loadDuration > 15000
     else if levelType is 'hero-ladder' and not gamesSimulated
+      return false if stillBuggy
       return false if cores < 8
       return false if heapLimit <= defaultHeapLimit
       return false if @loadDuration > 20000
@@ -456,6 +463,7 @@ module.exports = class PlayLevelView extends RootView
       return false if @loadDuration > 18000
     else
       console.warn "Unwritten level type simulation heuristics; fill these in for new level type #{levelType}?"
+      return false if stillBuggy
       return false if cores < 8
       return false if heapLimit < defaultHeapLimit
       return false if @loadDuration > 10000
@@ -562,7 +570,7 @@ module.exports = class PlayLevelView extends RootView
     session.save {screenshot: screenshot}, {patch: true, type: 'PUT'}
 
   onContactClicked: (e) ->
-    @openModalView contactModal = new ContactModal()
+    @openModalView contactModal = new ContactModal levelID: @level.get('slug') or @level.id, courseID: @courseID, courseInstanceID: @courseInstanceID
     screenshot = @surface.screenshot(1, 'image/png', 1.0, 1)
     body =
       b64png: screenshot.replace 'data:image/png;base64,', ''

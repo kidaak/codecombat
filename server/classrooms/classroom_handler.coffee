@@ -79,7 +79,7 @@ ClassroomHandler = class ClassroomHandler extends Handler
       alreadyNotInClassroom = not _.any classroom.get('members') or [], (memberID) -> memberID.toString() is userID
       return @sendSuccess(res, @formatEntity(req, classroom)) if alreadyNotInClassroom
       members = _.clone(classroom.get('members'))
-      members.splice(members.indexOf(userID), 1)
+      members = (m for m in members when m.toString() isnt userID)
       classroom.set('members', members)
       classroom.save (err, classroom) =>
         return @sendDatabaseError(res, err) if err
@@ -106,8 +106,7 @@ ClassroomHandler = class ClassroomHandler extends Handler
             address: email
           email_data:
             class_name: classroom.get('name')
-            # TODO: join_link
-            join_link: "https://codecombat.com/courses/students?_cc=" + (classroom.get('codeCamel') or classroom.get('code'))
+            join_link: "https://codecombat.com/courses?_cc=" + (classroom.get('codeCamel') or classroom.get('code'))
         sendwithus.api.send context, _.noop
       return @sendSuccess(res, {})
 
@@ -124,7 +123,8 @@ ClassroomHandler = class ClassroomHandler extends Handler
       Classroom.find {members: mongoose.Types.ObjectId(memberID)}, (err, classrooms) =>
         return @sendDatabaseError(res, err) if err
         return @sendSuccess(res, (@formatEntity(req, classroom) for classroom in classrooms))
-    else if code = req.query.code.toLowerCase()
+    else if code = req.query.code
+      code = code.toLowerCase()
       Classroom.findOne {code: code}, (err, classroom) =>
         return @sendDatabaseError(res, err) if err
         return @sendNotFoundError(res) unless classroom

@@ -499,8 +499,11 @@ module.exports = class CampaignView extends RootView
     levelSlug = levelElement.data 'level-slug'
     session = @preloadedSession if @preloadedSession?.loaded and @preloadedSession.levelSlug is levelSlug
     @setupManager = new LevelSetupManager supermodel: @supermodel, levelID: levelSlug, levelPath: levelElement.data('level-path'), levelName: levelElement.data('level-name'), hadEverChosenHero: @hadEverChosenHero, parent: @, session: session
+    @$levelInfo.find('.level-info, .progress').toggleClass('hide')
+    @listenToOnce @setupManager, 'open', ->
+      @$levelInfo.find('.level-info, .progress').toggleClass('hide')
+      @$levelInfo?.hide()
     @setupManager.open()
-    @$levelInfo?.hide()
 
   onClickViewSolutions: (e) ->
     levelElement = $(e.target).parents('.level-info-container')
@@ -549,6 +552,7 @@ module.exports = class CampaignView extends RootView
     @testParticles() if @particleMan
 
   playAmbientSound: ->
+    return unless me.get 'volume'
     return if @ambientSound
     return unless file = @campaign?.get('ambientSound')?[AudioPlayer.ext.substr 1]
     src = "/file/#{file}"
@@ -597,6 +601,7 @@ module.exports = class CampaignView extends RootView
     if volume isnt me.get 'volume'
       me.set 'volume', volume
       me.patch()
+      @playAmbientSound() if volume
 
   onToggleVolume: (e) ->
     button = $(e.target).closest('#volume-button')

@@ -20,6 +20,10 @@ module.exports = class StudentSignUpModal extends ModalView
     @willPlay = options.willPlay
     @classCode = utils.getQueryVariable('_cc') or ''
 
+  afterInsert: ->
+    super()
+    _.delay (=> @$('input:visible:first').focus()), 500
+
   onClickSkipLink: ->
     @trigger 'click-skip-link' # defer to view that opened this modal
     @hide?()
@@ -33,7 +37,7 @@ module.exports = class StudentSignUpModal extends ModalView
 
   emailCheck: ->
     email = @$('#email').val()
-    filter = /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,4}$/i  # https://news.ycombinator.com/item?id=5763990
+    filter = /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}$/i  # https://news.ycombinator.com/item?id=5763990
     unless filter.test(email)
       @$('#errors-alert').text($.i18n.t('share_progress_modal.email_invalid')).removeClass('hide')
       return false
@@ -67,7 +71,8 @@ module.exports = class StudentSignUpModal extends ModalView
     data.emails ?= {}
     data.emails.generalNews ?= {}
     data.emails.generalNews.enabled = false
-    window.tracker?.trackEvent 'Finished Student Signup', label: 'CodeCombat'
+    # TODO: Doesn't handle failed user creation.  Double posts when placed in onCreateUserSuccess.
+    window.tracker?.trackEvent 'Finished Student Signup', category: 'Courses', label: 'Courses Student Signup'
     @enableModalInProgress(@$el)
     user = new User(data)
     user.notyErrors = false

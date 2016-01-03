@@ -11,6 +11,16 @@ module.exports = class AddLevelSystemModal extends ModalView
 
   initialize: (options) ->
     @classroom = options.classroom
+    if @classroom
+      application.tracker?.trackEvent 'Classroom started edit settings', category: 'Courses', classroomID: @classroom.id
+    else
+      application.tracker?.trackEvent 'Create new class', category: 'Courses'
+
+  afterRender: ->
+    super()
+    disableLangSelect = @classroom?.get('members')?.length > 0
+    @$('#programming-language-select').prop('disabled', disableLangSelect)
+    @$('.language-locked').toggle(disableLangSelect)
 
   onClickSaveSettingsButton: ->
     name = $('.settings-name-input').val()

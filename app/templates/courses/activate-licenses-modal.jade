@@ -3,8 +3,9 @@ extends /templates/core/modal-base
 block modal-header-content
   .clearfix
   .text-center
-    h2 Activate Licenses
-    p= view.classroom.get('name')
+    h2(data-i18n="courses.enroll_paid")
+    if view.classroom
+      p= view.classroom.get('name')
 
 block modal-body-content
   - var usedLic = view.prepaids.totalRedeemers();
@@ -12,8 +13,9 @@ block modal-body-content
   - var remainingLic = totalLic - usedLic;
   .text-center
     p
-      strong.spr Licenses remaining:
+      strong.spr(data-i18n="courses.you_have1")
       strong= remainingLic
+      strong.spl(data-i18n="courses.you_have2")
 
   .row
     .col-sm-10.col-sm-offset-1
@@ -23,15 +25,15 @@ block modal-body-content
             .radio
               label
                 input(type="radio", name="targets" value="given" checked=true)
-                span.spr Activate license for student:
-                span= view.user.get('name')
+                span.spr(data-i18n="courses.use_one")
+                span= view.user.broadName()
             .radio
               label
                 input(type="radio", name="targets" value="selection")
-                span.spr Activate licenses for the following students:
+                span(data-i18n="courses.use_multiple")
         else
-          p Activate licenses for the following students:
-          
+          p(data-i18n="courses.use_multiple")
+
         .well.form-group
           for user in view.users.models
             .checkbox
@@ -39,31 +41,35 @@ block modal-body-content
                 - var paid = user.get('coursePrepaidID')
                 input(type="checkbox", disabled=paid, checked=true, data-user-id=user.id, name='user')
                 span.spr= user.broadName()
+                if paid
+                  span (
+                  span(data-i18n="courses.already_enrolled")
+                  span )
 
         #error-alert.alert.alert-danger.hide
-            
+
         #progress-area.hide
           .progress
             .progress-bar
-            
+
         #submit-form-area.text-center
           p
-            span.spr Total students:
+            span.spr(data-i18n="courses.total_students")
             span#total-selected-span.spr
             span#not-depleted-span
               | (
-              span.spr licenses remaining:
+              span.spr(data-i18n="courses.licenses_remaining")
               span#licenses-remaining-span
               | )
-            span#depleted-span 
+            span#depleted-span
               | (
-              span insufficient licenses
+              span(data-i18n="courses.insufficient_enrollments")
               | )
 
           p
-            button#activate-licenses-btn.btn.btn-success.text-uppercase(type="submit") Activate Licenses
-            
+            button#activate-licenses-btn.btn.btn-success.text-uppercase(type="submit", data-i18n="courses.enroll_students")
+
           p
-            a#get-more-licenses-btn.btn.btn-info.text-uppercase(href="/courses/purchase") Get More Licenses
-            
+            a#get-more-licenses-btn.btn.btn-info.text-uppercase(href="/courses/purchase", data-i18n="courses.get_enrollments")
+
 block modal-footer-content

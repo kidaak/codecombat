@@ -51,7 +51,6 @@ CourseInstanceHandler = class CourseInstanceHandler extends Handler
       if courseInstance
         console.log 'already made a course instance'
       return @sendSuccess(res, courseInstance) if courseInstance
-      console.log 'making a new course instance'
       courseInstance = new CourseInstance({
         courseID: courseID
         members: [req.user.get('_id')]
@@ -65,6 +64,7 @@ CourseInstanceHandler = class CourseInstanceHandler extends Handler
         @sendCreated(res, courseInstance)
 
   addMember: (req, res, courseInstanceID) ->
+    return @sendUnauthorizedError(res) if not req.user?
     userID = req.body.userID
     return @sendBadInputError(res, 'Input must be a MongoDB ID') unless utils.isID(userID)
     CourseInstance.findById courseInstanceID, (err, courseInstance) =>
@@ -96,6 +96,7 @@ CourseInstanceHandler = class CourseInstanceHandler extends Handler
                 @sendSuccess(res, @formatEntity(req, courseInstance))
 
   removeMember: (req, res, courseInstanceID) ->
+    return @sendUnauthorizedError(res) if not req.user?
     userID = req.body.userID
     return @sendBadInputError(res, 'Input must be a MongoDB ID') unless utils.isID(userID)
     CourseInstance.findById courseInstanceID, (err, courseInstance) =>
@@ -111,7 +112,7 @@ CourseInstanceHandler = class CourseInstanceHandler extends Handler
         alreadyNotInCourseInstance = not _.any courseInstance.get('members') or [], (memberID) -> memberID.toString() is userID
         return @sendSuccess(res, @formatEntity(req, courseInstance)) if alreadyNotInCourseInstance
         members = _.clone(courseInstance.get('members'))
-        members.splice(members.indexOf(userID), 1)
+        members = (m for m in members when m.toString() isnt userID)
         courseInstance.set('members', members)
         courseInstance.save (err, courseInstance) =>
           return @sendDatabaseError(res, err) if err
@@ -120,6 +121,7 @@ CourseInstanceHandler = class CourseInstanceHandler extends Handler
             @sendSuccess(res, @formatEntity(req, courseInstance))
 
   post: (req, res) ->
+    return @sendUnauthorizedError(res) if not req.user?
     return @sendBadInputError(res, 'No classroomID') unless req.body.classroomID
     return @sendBadInputError(res, 'No courseID') unless req.body.courseID
     Classroom.findById req.body.classroomID, (err, classroom) =>
@@ -140,6 +142,7 @@ CourseInstanceHandler = class CourseInstanceHandler extends Handler
     return doc
 
   getLevelSessionsAPI: (req, res, courseInstanceID) ->
+    return @sendUnauthorizedError(res) if not req.user?
     CourseInstance.findById courseInstanceID, (err, courseInstance) =>
       return @sendDatabaseError(res, err) if err
       return @sendNotFoundError(res) unless courseInstance
@@ -160,6 +163,7 @@ CourseInstanceHandler = class CourseInstanceHandler extends Handler
             @sendSuccess(res, cleandocs)
 
   getMyCourseLevelSessionsAPI: (req, res, courseInstanceID) ->
+    return @sendUnauthorizedError(res) if not req.user?
     CourseInstance.findById courseInstanceID, (err, courseInstance) =>
       return @sendDatabaseError(res, err) if err
       return @sendNotFoundError(res) unless courseInstance
@@ -179,6 +183,7 @@ CourseInstanceHandler = class CourseInstanceHandler extends Handler
             @sendSuccess(res, cleandocs)
 
   getMembersAPI: (req, res, courseInstanceID) ->
+    return @sendUnauthorizedError(res) if not req.user?
     CourseInstance.findById courseInstanceID, (err, courseInstance) =>
       return @sendDatabaseError(res, err) if err
       return @sendNotFoundError(res) unless courseInstance
@@ -189,6 +194,7 @@ CourseInstanceHandler = class CourseInstanceHandler extends Handler
         @sendSuccess(res, cleandocs)
 
   inviteStudents: (req, res, courseInstanceID) ->
+    return @sendUnauthorizedError(res) if not req.user?
     if not req.body.emails
       return @sendBadInputError(res, 'Emails not included')
     CourseInstance.findById courseInstanceID, (err, courseInstance) =>
@@ -240,9 +246,9 @@ CourseInstanceHandler = class CourseInstanceHandler extends Handler
           'redeemers.userID': { $ne: req.user.get('_id') }
           $where: "this.redeemers.length < #{prepaid.get('maxRedeemers')}"
         update = { $push: { redeemers : { date: new Date(), userID: req.user.get('_id') } }}
-        Prepaid.update query, update, (err, nMatched) =>
+        Prepaid.update query, update, (err, result) =>
           return @sendDatabaseError(res, err) if err
-          if nMatched is 0
+          if result?.nModified is 0
             @logError(req.user, "Course instance update prepaid lost race on maxRedeemers")
             return @sendForbiddenError(res)
 
@@ -255,6 +261,7 @@ CourseInstanceHandler = class CourseInstanceHandler extends Handler
             @sendSuccess(res, courseInstances)
 
   findByLevel: (req, res, levelOriginal) ->
+    return @sendUnauthorizedError(res) if not req.user?
     # Find all CourseInstances that req.user is a part of that match the given level.
     CourseInstance.find {_id: {$in: req.user.get('courseInstances')}},  (err, courseInstances) =>
       return @sendDatabaseError res, err if err
@@ -288,6 +295,8 @@ CourseInstanceHandler = class CourseInstanceHandler extends Handler
       return @sendForbiddenError(res) unless req.user
       return @sendBadInputError(res, 'Bad memberID') unless utils.isID classroomID
       Classroom.findById classroomID, (err, classroom) =>
+        return @sendDatabaseError(res, err) if err
+        return @sendNotFoundError(res) unless classroom
         return @sendForbiddenError(res) unless classroom.isMember(req.user._id) or classroom.isOwner(req.user._id)
         CourseInstance.find {classroomID: mongoose.Types.ObjectId(classroomID)}, (err, courseInstances) =>
           return @sendDatabaseError(res, err) if err

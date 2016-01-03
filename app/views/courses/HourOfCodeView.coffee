@@ -18,7 +18,7 @@ module.exports = class HourOfCodeView extends RootView
   template: template
 
   events:
-    'click #student-btn': 'onClickStudentButton'
+    'click #continue-playing-btn': 'onClickContinuePlayingButton'
     'click #start-new-game-btn': 'onClickStartNewGameButton'
     'click #log-in-btn': 'onClickLogInButton'
     'click #log-out-link': 'onClickLogOutLink'
@@ -28,7 +28,7 @@ module.exports = class HourOfCodeView extends RootView
     @courseInstances = new CocoCollection([], { url: "/db/user/#{me.id}/course_instances", model: CourseInstance})
     @listenToOnce @courseInstances, 'sync', @onCourseInstancesLoaded
     @courseInstances.comparator = (ci) -> return ci.get('classroomID') + ci.get('courseID')
-    @supermodel.loadCollection(@courseInstances, 'course_instances')
+    @supermodel.loadCollection(@courseInstances, 'course_instances', { cache: false })
 
   onCourseInstancesLoaded: ->
     @hourOfCodeCourseInstance = @courseInstances.findWhere({hourOfCode: true})
@@ -39,7 +39,7 @@ module.exports = class HourOfCodeView extends RootView
       })
       @sessions.comparator = 'created'
       @listenTo @sessions, 'sync', @onSessionsLoaded
-      @supermodel.loadCollection(@sessions, 'sessions')
+      @supermodel.loadCollection(@sessions, 'sessions', { cache: false })
 
   onSessionsLoaded: ->
     @lastSession = @sessions.last()
@@ -52,7 +52,7 @@ module.exports = class HourOfCodeView extends RootView
           project: 'name,slug'
         }
       })
-    
+
   setUpHourOfCode: ->
     # If we haven't tracked this player as an hourOfCode player yet, and it's a new account, we do that now.
     elapsed = new Date() - new Date(me.get('dateCreated'))
@@ -60,16 +60,26 @@ module.exports = class HourOfCodeView extends RootView
       me.set('hourOfCode', true)
       me.patch()
       $('body').append($('<img src="https://code.org/api/hour/begin_codecombat.png" style="visibility: hidden;">'))
-      application.tracker?.trackEvent 'Hour of Code Begin'
+      window.tracker?.trackEvent 'Hour of Code Begin'
+
+  onClickContinuePlayingButton: ->
+    url = @continuePlayingLink()
+    window.tracker?.trackEvent 'HoC continue playing ', category: 'HoC', label: url
+    app.router.navigate(url, { trigger: true })
+
+  afterRender: ->
+    super()
+    @onClickStartNewGameButton() if @getQueryVariable('go') and not @lastLevel
 
   onClickStartNewGameButton: ->
-    # user without hour of code course instance, creates one, starts playing
+    # User without hour of code course instance, creates one, starts playing
     modal = new ChooseLanguageModal({
       logoutFirst: @hourOfCodeCourseInstance?
     })
     @openModalView(modal)
     @listenToOnce modal, 'set-language', @startHourOfCodePlay
-    
+    window.tracker?.trackEvent 'Start New Game', category: 'HoC', label: 'HoC Start New Game'
+
   continuePlayingLink: ->
     ci = @hourOfCodeCourseInstance
     "/play/level/#{@lastLevel.get('slug')}?course=#{ci.get('courseID')}&course-instance=#{ci.id}"
@@ -78,20 +88,22 @@ module.exports = class HourOfCodeView extends RootView
     @$('#main-content').hide()
     @$('#begin-hoc-area').removeClass('hide')
     hocCourseInstance = new CourseInstance()
-    hocCourseInstance.upsertForHOC()
+    hocCourseInstance.upsertForHOC({cache: false})
     @listenToOnce hocCourseInstance, 'sync', ->
       url = hocCourseInstance.firstLevelURL()
-      app.router.navigate(url, { trigger: true })
+      document.location.href = url
 
   onClickLogInButton: ->
     modal = new StudentLogInModal()
     @openModalView(modal)
     modal.on 'want-to-create-account', @onWantToCreateAccount, @
+    window.tracker?.trackEvent 'Started Login', category: 'HoC', label: 'HoC Login'
 
   onWantToCreateAccount: ->
     modal = new StudentSignUpModal()
     @openModalView(modal)
+    window.tracker?.trackEvent 'Started Signup', category: 'HoC', label: 'HoC Sign Up'
 
   onClickLogOutLink: ->
-    auth.logoutUser() 
-   
+    window.tracker?.trackEvent 'Log Out', category: 'HoC', label: 'HoC Log Out'
+    auth.logoutUser()
