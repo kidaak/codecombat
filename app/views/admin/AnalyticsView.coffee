@@ -1,3 +1,6 @@
+CocoCollection = require 'collections/CocoCollection'
+Course = require 'models/Course'
+CourseInstance = require 'models/CourseInstance'
 require 'vendor/d3'
 d3Utils = require 'core/d3_utils'
 RootView = require 'views/core/RootView'
@@ -7,7 +10,9 @@ utils = require 'core/utils'
 module.exports = class AnalyticsView extends RootView
   id: 'admin-analytics-view'
   template: template
+  furthestCourseDayRange: 30
   lineColors: ['red', 'blue', 'green', 'purple', 'goldenrod', 'brown', 'darkcyan']
+  minSchoolCount: 20
 
   constructor: (options) ->
     super options
@@ -20,6 +25,8 @@ module.exports = class AnalyticsView extends RootView
     context.activeUsers = @activeUsers ? []
     context.revenue = @revenue ? []
     context.revenueGroups = @revenueGroups ? {}
+    context.dayEnrollmentsMap = @dayEnrollmentsMap ? {}
+    context.enrollmentDays = @enrollmentDays ? []
     context
 
   afterRender: ->
@@ -27,7 +34,7 @@ module.exports = class AnalyticsView extends RootView
     @createLineCharts()
 
   loadData: ->
-    @supermodel.addRequestResource('active_classes', {
+    @supermodel.addRequestResource({
       url: '/db/analytics_perday/-/active_classes'
       method: 'POST'
       success: (data) =>
@@ -58,7 +65,7 @@ module.exports = class AnalyticsView extends RootView
         @render?()
     }, 0).load()
 
-    @supermodel.addRequestResource('active_users', {
+    @supermodel.addRequestResource({
       url: '/db/analytics_perday/-/active_users'
       method: 'POST'
       success: (data) =>
@@ -72,7 +79,7 @@ module.exports = class AnalyticsView extends RootView
         @render?()
     }, 0).load()
 
-    @supermodel.addRequestResource('recurring_revenue', {
+    @supermodel.addRequestResource({
       url: '/db/analytics_perday/-/recurring_revenue'
       method: 'POST'
       success: (data) =>
@@ -115,6 +122,126 @@ module.exports = class AnalyticsView extends RootView
         @render?()
     }, 0).load()
 
+    @supermodel.addRequestResource({
+      url: '/db/user/-/school_counts'
+      method: 'POST'
+      data: {minCount: @minSchoolCount}
+      success: (@schoolCounts) =>
+        @schoolCounts?.sort (a, b) ->
+          return -1 if a.count > b.count
+          return 0 if a.count is b.count
+          1
+        @render?()
+    }, 0).load()
+
+    @supermodel.addRequestResource({
+      url: '/db/prepaid/-/courses'
+      method: 'POST'
+      data: {project: {maxRedeemers: 1, properties: 1, redeemers: 1}}
+      success: (prepaids) =>
+        paidDayMaxMap = {}
+        paidDayRedeemedMap = {}
+        trialDayMaxMap = {}
+        trialDayRedeemedMap = {}
+        for prepaid in prepaids
+          day = utils.objectIdToDate(prepaid._id).toISOString().substring(0, 10)
+          if prepaid.properties?.trialRequestID? or prepaid.properties?.endDate?
+            trialDayMaxMap[day] ?= 0
+            if prepaid.properties?.endDate?
+              trialDayMaxMap[day] += prepaid.redeemers?.length ? 0
+            else
+              trialDayMaxMap[day] += prepaid.maxRedeemers
+            for redeemer in (prepaid.redeemers ? [])
+              redeemDay = redeemer.date.substring(0, 10)
+              trialDayRedeemedMap[redeemDay] ?= 0
+              trialDayRedeemedMap[redeemDay]++
+          else
+            paidDayMaxMap[day] ?= 0
+            paidDayMaxMap[day] += prepaid.maxRedeemers
+            for redeemer in prepaid.redeemers
+              redeemDay = redeemer.date.substring(0, 10)
+              paidDayRedeemedMap[redeemDay] ?= 0
+              paidDayRedeemedMap[redeemDay]++
+              
+        @dayEnrollmentsMap = {}
+        @paidCourseTotalEnrollments = []
+        for day, count of paidDayMaxMap
+          @paidCourseTotalEnrollments.push({day: day, count: count})
+          @dayEnrollmentsMap[day] ?= {paidIssued: 0, paidRedeemed: 0, trialIssued: 0, trialRedeemed: 0}
+          @dayEnrollmentsMap[day].paidIssued += count
+        @paidCourseTotalEnrollments.sort (a, b) -> a.day.localeCompare(b.day)
+        @paidCourseRedeemedEnrollments = []
+        for day, count of paidDayRedeemedMap
+          @paidCourseRedeemedEnrollments.push({day: day, count: count}) 
+          @dayEnrollmentsMap[day] ?= {paidIssued: 0, paidRedeemed: 0, trialIssued: 0, trialRedeemed: 0}
+          @dayEnrollmentsMap[day].paidRedeemed += count
+        @paidCourseRedeemedEnrollments.sort (a, b) -> a.day.localeCompare(b.day)
+        @trialCourseTotalEnrollments = []
+        for day, count of trialDayMaxMap
+          @trialCourseTotalEnrollments.push({day: day, count: count})
+          @dayEnrollmentsMap[day] ?= {paidIssued: 0, paidRedeemed: 0, trialIssued: 0, trialRedeemed: 0}
+          @dayEnrollmentsMap[day].trialIssued += count
+        @trialCourseTotalEnrollments.sort (a, b) -> a.day.localeCompare(b.day)
+        @trialCourseRedeemedEnrollments = []
+        for day, count of trialDayRedeemedMap
+          @trialCourseRedeemedEnrollments.push({day: day, count: count})
+          @dayEnrollmentsMap[day] ?= {paidIssued: 0, paidRedeemed: 0, trialIssued: 0, trialRedeemed: 0}
+          @dayEnrollmentsMap[day].trialRedeemed += count
+        @trialCourseRedeemedEnrollments.sort (a, b) -> a.day.localeCompare(b.day)
+        @updateEnrollmentsChartData()
+        @render?()
+    }, 0).load()
+
+    @courses = new CocoCollection([], { url: "/db/course", model: Course})
+    @courses.comparator = "_id" 
+    @listenToOnce @courses, 'sync', @onCoursesSync
+    @supermodel.loadCollection(@courses)
+
+  onCoursesSync: ->
+    # Assumes courses retrieved in order
+    @courseOrderMap = {}
+    @courseOrderMap[@courses.models[i].get('_id')] = i for i in [0...@courses.models.length]
+
+    startDay = new Date()
+    startDay.setUTCDate(startDay.getUTCDate() - @furthestCourseDayRange)
+    startDay = startDay.toISOString().substring(0, 10)
+    options =
+      url: '/db/course_instance/-/recent'
+      method: 'POST'
+      data: {startDay: startDay}
+    options.error = (models, response, options) =>
+      return if @destroyed
+      console.error 'Failed to get recent course instances', response
+    options.success = (models) =>
+      @courseInstances = models ? [] 
+      @onCourseInstancesSync()
+      @render?()
+    @supermodel.addRequestResource(options, 0).load()
+
+  onCourseInstancesSync: ->
+    return unless @courseInstances
+
+    # Find highest course for teachers and students
+    @teacherFurthestCourseMap = {}
+    @studentFurthestCourseMap = {}
+    for courseInstance in @courseInstances
+      courseID = courseInstance.courseID
+      teacherID = courseInstance.ownerID
+      if not @teacherFurthestCourseMap[teacherID] or @teacherFurthestCourseMap[teacherID] < @courseOrderMap[courseID]
+        @teacherFurthestCourseMap[teacherID] = @courseOrderMap[courseID]
+      for studentID in courseInstance.members
+        if not @studentFurthestCourseMap[studentID] or @studentFurthestCourseMap[studentID] < @courseOrderMap[courseID]
+          @studentFurthestCourseMap[studentID] = @courseOrderMap[courseID]
+
+    @teacherCourseDistribution = {}
+    for teacherID, courseIndex of @teacherFurthestCourseMap
+      @teacherCourseDistribution[courseIndex] ?= 0
+      @teacherCourseDistribution[courseIndex]++
+    @studentCourseDistribution = {}
+    for studentID, courseIndex of @studentFurthestCourseMap
+      @studentCourseDistribution[courseIndex] ?= 0
+      @studentCourseDistribution[courseIndex]++
+
   createLineChartPoints: (days, data) ->
     points = []
     for entry, i in data
@@ -145,13 +272,14 @@ module.exports = class AnalyticsView extends RootView
     d3Utils.createLineChart('.kpi-chart', @kpiChartLines)
     d3Utils.createLineChart('.active-classes-chart', @activeClassesChartLines)
     d3Utils.createLineChart('.active-users-chart', @activeUsersChartLines)
+    d3Utils.createLineChart('.paid-courses-chart', @enrollmentsChartLines)
     d3Utils.createLineChart('.recurring-revenue-chart', @revenueChartLines)
 
   updateAllKPIChartData: ->
     @kpiRecentChartLines = []
     @kpiChartLines = []
     @updateKPIChartData(60, @kpiRecentChartLines)
-    @updateKPIChartData(300, @kpiChartLines)
+    @updateKPIChartData(365, @kpiChartLines)
 
   updateKPIChartData: (timeframeDays, chartLines) ->
     days = d3Utils.createContiguousDays(timeframeDays)
@@ -292,6 +420,90 @@ module.exports = class AnalyticsView extends RootView
       max: _.max(dausmausPoints, 'y').y
       showYScale: true
 
+  updateEnrollmentsChartData: ->
+    @enrollmentsChartLines = []
+    return unless @paidCourseTotalEnrollments?.length and @trialCourseTotalEnrollments?.length
+    days = d3Utils.createContiguousDays(90, false)
+    @enrollmentDays = _.cloneDeep(days)
+    @enrollmentDays.reverse()
+
+    colorIndex = 0
+    dailyMax = 0
+
+    data = []
+    total = 0
+    for entry in @paidCourseTotalEnrollments
+      total += entry.count
+      data.push
+        day: entry.day
+        value: total
+    points = @createLineChartPoints(days, data)
+    @enrollmentsChartLines.push
+      points: points
+      description: 'Total paid enrollments issued'
+      lineColor: @lineColors[colorIndex++ % @lineColors.length]
+      strokeWidth: 1
+      min: 0
+      max: _.max(points, 'y').y
+      showYScale: true
+    dailyMax = _.max([dailyMax, _.max(points, 'y').y])
+
+    data = []
+    total = 0
+    for entry in @paidCourseRedeemedEnrollments
+      total += entry.count
+      data.push
+        day: entry.day
+        value: total
+    points = @createLineChartPoints(days, data)
+    @enrollmentsChartLines.push
+      points: points
+      description: 'Total paid enrollments redeemed'
+      lineColor: @lineColors[colorIndex++ % @lineColors.length]
+      strokeWidth: 1
+      min: 0
+      max: _.max(points, 'y').y
+      showYScale: false
+    dailyMax = _.max([dailyMax, _.max(points, 'y').y])
+
+    data = []
+    total = 0
+    for entry in @trialCourseTotalEnrollments
+      total += entry.count
+      data.push
+        day: entry.day
+        value: total
+    points = @createLineChartPoints(days, data)
+    @enrollmentsChartLines.push
+      points: points
+      description: 'Total trial enrollments issued'
+      lineColor: @lineColors[colorIndex++ % @lineColors.length]
+      strokeWidth: 1
+      min: 0
+      max: _.max(points, 'y').y
+      showYScale: false
+    dailyMax = _.max([dailyMax, _.max(points, 'y').y])
+
+    data = []
+    total = 0
+    for entry in @trialCourseRedeemedEnrollments
+      total += entry.count
+      data.push
+        day: entry.day
+        value: total
+    points = @createLineChartPoints(days, data)
+    @enrollmentsChartLines.push
+      points: points
+      description: 'Total trial enrollments redeemed'
+      lineColor: @lineColors[colorIndex++ % @lineColors.length]
+      strokeWidth: 1
+      min: 0
+      max: _.max(points, 'y').y
+      showYScale: false
+    dailyMax = _.max([dailyMax, _.max(points, 'y').y])
+
+    line.max = dailyMax for line in @enrollmentsChartLines
+
   updateRevenueChartData: ->
     @revenueChartLines = []
     return unless @revenue?.length
@@ -304,7 +516,6 @@ module.exports = class AnalyticsView extends RootView
         groupDayMap[@revenueGroups[i]][entry.day] ?= 0
         groupDayMap[@revenueGroups[i]][entry.day] += count
 
-    lines = []
     colorIndex = 0
     dailyMax = 0
     for group, entries of groupDayMap
